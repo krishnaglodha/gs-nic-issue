@@ -85,8 +85,7 @@ services:
       - ACTIVEMQ_SERVER_URI=tcp://br-geo-coll:61616?maximumConnections=1000&wireFormat.maxFrameSize=104857600&jms.useAsyncSend=false&transport.daemon=true
       - ACTIVEMQ_SERVER_DISCOVERYURI=multicast://default
     depends_on:
-      geobrokerdbnew:
-        condition: service_healthy
+      - geobrokerdbnew
     stdin_open: true  
     tty: true
     healthcheck:
@@ -154,10 +153,8 @@ services:
       - TOGGLE_SLAVE=true
       - GEOSERVER_CSRF_DISABLED=true
     depends_on:
-      br-geo-coll:
-        condition: service_healthy
-      gfencedb:
-        condition: service_healthy
+      - br-geo-coll
+      - gfencedb
     healthcheck:
       test: curl --noproxy "*" --fail -s http://127.0.0.1:8080/geoserver/web || exit 1
       interval: 1m30s
@@ -216,12 +213,9 @@ services:
       - EMBEDDED_BROKER=disabled 
       - GEOSERVER_CSRF_DISABLED=true 
     depends_on:
-      node1-geo:
-        condition: service_healthy
-      gfencedb:
-        condition: service_healthy
-      br-geo-coll:
-        condition: service_healthy
+      - node1-geo
+      - gfencedb
+      - br-geo-coll
     ports:
       - 8082:8080
     healthcheck:
@@ -385,12 +379,9 @@ services:
     stdin_open: true  
     tty: true
     depends_on:
-      node1-geo:
-        condition: service_healthy
-      node2-geo:
-        condition: service_healthy
-      gfencedb:
-        condition: service_healthy
+      - node1-geo
+      - node2-geo
+      - gfencedb
     ports:
       - 9005:9005
       - 80:80
