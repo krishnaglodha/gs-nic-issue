@@ -167,6 +167,7 @@ services:
       - ./georoma-dev-geoserver_data:/opt/geoserver/data_dir_shared
       - ./data-geoserver-7:/dati-geoserver
       - ./cache-geoserver-4:/cache-geoserver
+      - ./geoserver/foo.sh:/docker-entrypoint-geoserver.d/foo.sh
     deploy:
       mode: replicated
       replicas: 1
@@ -228,6 +229,7 @@ services:
       - ./georoma-dev-geoserver_data:/opt/geoserver/data_dir_shared
       - ./data-geoserver-7:/dati-geoserver
       - ./cache-geoserver-4:/cache-geoserver
+      - ./geoserver/foo.sh:/docker-entrypoint-geoserver.d/foo.sh
     deploy:
       mode: replicated
       replicas: 1
