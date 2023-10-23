@@ -384,8 +384,6 @@ services:
       - gfencedb
     ports:
       - 9005:9005
-      - 80:80
-      - 443:443
     networks:
       - lan-cdr-coll
     # healthcheck:
