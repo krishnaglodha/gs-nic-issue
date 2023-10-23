@@ -1,0 +1,462 @@
+version: "3.4"
+
+networks:
+  lan-cdr-coll:
+      # external: true
+
+
+volumes:
+  georoma-dev-geoserver_data:
+    # driver: pxd
+    # name: georoma-dev-geoserver_data
+  data-geoserver-7:
+    # driver: local
+    # driver_opts:
+    #   type: cifs
+    #   o: username=ecaas,password=dxc2020test!,rw,uid=0,gid=0,vers=1.0
+    #   device: "\\\\10.173.9.66\\Geoserver_Ecaas"
+  cache-geoserver-4:
+    # driver: local
+    # driver_opts:
+    #   type: cifs
+    #   o: username=ecaas,password=dxc2020test!,rw,uid=0,gid=0,vers=1.0
+    #   device: "\\\\10.173.9.66\\Geoserver_Cache"    
+  gfencedb-data:
+    # driver: pxd
+    # name: gfencedb-data
+  geobrokerdb-data-new:
+    # driver: pxd
+    # name: geobrokerdb-data-new
+
+services:
+  ################################################
+  # Georoma geoserver                            #
+  ################################################
+
+  geobrokerdbnew:
+    image: dtr.datacenter.comune.roma/formaromae/georoma-geobrokerdb-postgis:0.0.1
+    container_name: geobrokerdbnew
+    build:
+      context: ./georoma-geobrokerdb-postgis
+      dockerfile: Dockerfile
+    stdin_open: true
+    tty: true
+    networks:
+      - lan-cdr-coll
+    environment:
+      - POSTGRES_DB=thebrokermew
+      - POSTGRES_USER=theuser
+      - POSTGRES_PASS=thepassword
+      - ALLOW_IP_RANGE=0.0.0.0/0
+      - FORCE_SSL=TRUE
+    healthcheck:
+      test: "PGPASSWORD=thepassword pg_isready -h 127.0.0.1 -U theuser -d thebrokermew"
+    volumes:
+      - ./geobrokerdb-data-new:/var/lib/postgresql
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.docker.network=lan-cdr-coll"
+        # - "traefik.backend.loadbalancer.stickyness=true"
+        - "traefik.frontend.entryPoints=http,https"
+        - "com.dxc.ecaas.friendlyname=Georoma geobroker Postgis"        
+        - "com.docker.ucp.access.label=/Shared/georoma"
+      placement: 
+        constraints: [node.labels.ambiente==collaudo] 
+      restart_policy:
+        condition: on-failure
+        delay: 0s
+        max_attempts: 3
+        window: 10s
+  br-geo-coll:
+    image: dtr.datacenter.comune.roma/formaromae/georoma-geoserver-broker:0.0.2
+    build:
+      context: ./activemq
+      dockerfile: Dockerfile
+    environment:
+      - JAVA_HOME=/opt/java/openjdk
+      - HOST=geobrokerdbnew
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=thebrokermew
+      - POSTGRES_USER=theuser
+      - POSTGRES_PASS=thepassword
+      - SSL_MODE=false
+      - ACTIVEMQ_SERVER_URI=tcp://br-geo-coll:61616?maximumConnections=1000&wireFormat.maxFrameSize=104857600&jms.useAsyncSend=false&transport.daemon=true
+      - ACTIVEMQ_SERVER_DISCOVERYURI=multicast://default
+    depends_on:
+      geobrokerdbnew:
+        condition: service_healthy
+    stdin_open: true  
+    tty: true
+    healthcheck:
+      test: netstat -ltn | grep -c ":61616"
+      interval: 60s
+      timeout: 15s
+      retries: 10
+    networks:
+      - lan-cdr-coll    
+    #healthcheck:
+    #  test: curl --noproxy "*" --fail -s http://127.0.0.1:8080 || exit 1
+    #  interval: 1m30s
+    #  timeout: 100s
+    #  retries: 3
+    #  start_period: 500s
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.port=8080"
+        - "traefik.docker.network=lan-cdr-coll"
+        # - "traefik.backend.loadbalancer.stickyness=true"
+        - "traefik.frontend.entryPoints=http"
+        - "traefik.frontend.rule=Host:georoma-geoserver-broker.ecaas.datacenter.comune.roma"
+        - "com.dxc.ecaas.friendlyname=Georoma Geoserver"        
+        - "com.docker.ucp.access.label=/Shared/georoma"
+      
+      placement: 
+        constraints: [node.labels.ambiente==collaudo] 
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '3'
+          memory: 2g
+    
+
+
+  node1-geo:
+    image: dtr.datacenter.comune.roma/formaromae/georoma-geoserver-cluster-node1:0.0.6
+    build:
+      context: ./geoserver
+      dockerfile: Dockerfile
+    stdin_open: true  
+    tty: true
+    networks:
+      - lan-cdr-coll
+    environment:
+      - "JAVA_OPTS=-Xms8192m -Xmx8192m -Dlog4j2.formatMsgNoLookups=True -Dhttps.protocols=TLSv1.2 -Dgeofence-ovr=file:/opt/geoserver/data_dir_shared/geofence/geofence-default-override.properties -Dhazelcast.config.dir=/opt/geoserver/data_dir_shared/gwc-distributed -Dhttp.proxyHost=10.173.21.20 -Dhttp.proxyPort=3128 -Dhttps.proxyHost=10.173.21.20 -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=\"localhost|127.0.0.1|ssopre.comune.roma.it\" -Dhttps.nonProxyHosts=\"localhost|127.0.0.1|ssopre.comune.roma.it\""
+      - GEOWEBCACHE_CACHE_DIR=/cache-geoserver/gwc
+      - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir_shared
+      - STABLE_EXTENSIONS=oracle-plugin,importer-plugin,geofence-server-plugin
+      - COMMUNITY_EXTENSIONS=importer-jdbc-plugin,jms-cluster-plugin,sec-oauth2-openid-connect-plugin,gwc-distributed-plugin
+      - EXISTING_DATA_DIR=true
+      - GEOSERVER_ADMIN_PASSWORD=Geo$$erver1!
+      - RESET_ADMIN_CREDENTIALS=TRUE
+      - EXTRA_CONFIG_DIR=/settings
+      - RANDOMSTRING=23bd87cfa32node1
+      - INSTANCE_STRING=ac3bcba2fa7d989678a01ef4facc4173010cd8b40d2e5f5a8d18d5f863cnode1
+      - BROKER_URL=tcp://br-geo-coll:61616
+      - READONLY=disabled
+      - CLUSTER_DURABILITY=false
+      - CLUSTERING=True
+      - TOGGLE_MASTER=true
+      - TOGGLE_SLAVE=true
+      - GEOSERVER_CSRF_DISABLED=true
+    depends_on:
+      br-geo-coll:
+        condition: service_healthy
+      gfencedb:
+        condition: service_healthy
+    healthcheck:
+      test: curl --noproxy "*" --fail -s http://127.0.0.1:8080/geoserver/web || exit 1
+      interval: 1m30s
+      timeout: 100s
+      retries: 3
+      start_period: 100s
+    ports:
+      - 8081:8080
+    volumes:
+      - ./georoma-dev-geoserver_data:/opt/geoserver/data_dir_shared
+      - ./data-geoserver-7:/dati-geoserver
+      - ./cache-geoserver-4:/cache-geoserver
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.port=8080" 
+        - "traefik.docker.network=lan-cdr-coll"
+        # - "traefik.backend.loadbalancer.stickyness=true"
+        # - "traefik.backend.loadbalancer.stickiness.cookieName=JSESSIONID"
+        - "traefik.node.frontend.entryPoints=http"
+        - "traefik.node.frontend.rule=Host:georoma-geoserver-node1.ecaas.datacenter.comune.roma"
+        - "com.dxc.ecaas.friendlyname=Georoma Geoserver 1"        
+        - "com.docker.ucp.access.label=/Shared/georoma"
+      placement: 
+        constraints: [node.labels.ambiente==collaudo] 
+      restart_policy:
+        condition: on-failure
+  node2-geo:
+    image: dtr.datacenter.comune.roma/formaromae/georoma-geoserver-cluster-node2:0.0.6
+    build:
+      context: ./geoserver
+      dockerfile: Dockerfile
+    stdin_open: true  
+    tty: true
+    networks:
+      - lan-cdr-coll
+    environment:
+      - "JAVA_OPTS=-Xms8192m -Xmx8192m -Dlog4j2.formatMsgNoLookups=True -Dhttps.protocols=TLSv1.2 -Dgeofence-ovr=file:/opt/geoserver/data_dir_shared/geofence/geofence-default-override.properties -Dhazelcast.config.dir=/opt/geoserver/data_dir_shared/gwc-distributed -Dhttp.proxyHost=10.173.21.20 -Dhttp.proxyPort=3128 -Dhttps.proxyHost=10.173.21.20 -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=\"localhost|127.0.0.1|ssopre.comune.roma.it\" -Dhttps.nonProxyHosts=\"localhost|127.0.0.1|ssopre.comune.roma.it\""
+      - GEOWEBCACHE_CACHE_DIR=/cache-geoserver/gwc
+      - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir_shared      
+      - STABLE_EXTENSIONS=oracle-plugin,importer-plugin,geofence-server-plugin
+      - COMMUNITY_EXTENSIONS=importer-jdbc-plugin,jms-cluster-plugin,sec-oauth2-openid-connect-plugin,gwc-distributed-plugin
+      - EXISTING_DATA_DIR=true
+      - GEOSERVER_ADMIN_PASSWORD=Geo$$erver1!
+      - RESET_ADMIN_CREDENTIALS=TRUE
+      - EXTRA_CONFIG_DIR=/settings
+      - RANDOMSTRING=23bd87cfa32node2
+      - INSTANCE_STRING=ac3bcba2fa7d989678a01ef4facc4173010cd8b40d2e5f5a8d18d5f863cnode2
+      - BROKER_URL=tcp://br-geo-coll:61616
+      - READONLY=disabled
+      - CLUSTER_DURABILITY=false
+      - CLUSTERING=true
+      - TOGGLE_MASTER=true
+      - TOGGLE_SLAVE=true
+      - EMBEDDED_BROKER=disabled 
+      - GEOSERVER_CSRF_DISABLED=true 
+    depends_on:
+      node1-geo:
+        condition: service_healthy
+      gfencedb:
+        condition: service_healthy
+      br-geo-coll:
+        condition: service_healthy
+    ports:
+      - 8082:8080
+    healthcheck:
+      test: curl --noproxy "*" --fail -s http://127.0.0.1:8080/geoserver/web || exit 1
+      interval: 1m30s
+      timeout: 10s
+      retries: 3
+      start_period: 100s 
+    volumes:
+      - ./georoma-dev-geoserver_data:/opt/geoserver/data_dir_shared
+      - ./data-geoserver-7:/dati-geoserver
+      - ./cache-geoserver-4:/cache-geoserver
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.port=8080"
+        - "traefik.docker.network=lan-cdr-coll"
+        # - "traefik.backend.loadbalancer.stickyness=true"
+        # - "traefik.backend.loadbalancer.stickiness.cookieName=JSESSIONID"
+        - "traefik.node.frontend.entryPoints=http"
+        - "traefik.node.frontend.rule=Host:georoma-geoserver-node2.ecaas.datacenter.comune.roma"
+        - "com.dxc.ecaas.friendlyname=Georoma Geoserver 2"        
+        - "com.docker.ucp.access.label=/Shared/georoma"
+      placement: 
+        constraints: [node.labels.ambiente==collaudo] 
+      restart_policy:
+        condition: on-failure
+
+  # node3-geo:
+  #   image: dtr.datacenter.comune.roma/formaromae/georoma-geoserver-cluster-node3:0.0.6
+  #   build:
+  #     context: ./geoserver
+  #     dockerfile: Dockerfile
+  #   stdin_open: true  
+  #   tty: true
+  #   networks:
+  #     - lan-cdr-coll
+  #   environment:
+  #     - "JAVA_OPTS=-Xms8192m -Xmx8192m -Dlog4j2.formatMsgNoLookups=True -Dhttps.protocols=TLSv1.2 -Dgeofence-ovr=file:/opt/geoserver/data_dir_shared/geofence/geofence-default-override.properties -Dhazelcast.config.dir=/opt/geoserver/data_dir_shared/gwc-distributed -Dhttp.proxyHost=10.173.21.20 -Dhttp.proxyPort=3128 -Dhttps.proxyHost=10.173.21.20 -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=\"localhost|127.0.0.1|ssopre.comune.roma.it\" -Dhttps.nonProxyHosts=\"localhost|127.0.0.1|ssopre.comune.roma.it\""
+  #     - GEOWEBCACHE_CACHE_DIR=/cache-geoserver/gwc
+  #     - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir_shared      
+  #     - STABLE_EXTENSIONS=oracle-plugin,importer-plugin,geofence-server-plugin
+  #     - COMMUNITY_EXTENSIONS=importer-jdbc-plugin,jms-cluster-plugin,sec-oauth2-openid-connect-plugin,gwc-distributed-plugin
+  #     - EXISTING_DATA_DIR=true
+  #     - GEOSERVER_ADMIN_PASSWORD=Geo$$erver1!
+  #     - RESET_ADMIN_CREDENTIALS=TRUE
+  #     - EXTRA_CONFIG_DIR=/settings
+  #     - RANDOMSTRING=23bd87cfa32node3
+  #     - INSTANCE_STRING=ac3bcba2fa7d989678a01ef4facc4173010cd8b40d2e5f5a8d18d5f863cnode3
+  #     - BROKER_URL=tcp://br-geo-coll:61616
+  #     - READONLY=disabled
+  #     - CLUSTER_DURABILITY=false
+  #     - CLUSTERING=true
+  #     - TOGGLE_MASTER=true
+  #     - TOGGLE_SLAVE=true
+  #     - EMBEDDED_BROKER=disabled
+  #     - GEOSERVER_CSRF_DISABLED=true
+  #   depends_on:
+  #     - br-geo-coll
+  #     - gfencedb
+  #   healthcheck:
+  #     test: curl --noproxy "*" --fail -s http://127.0.0.1:8080/geoserver/web || exit 1
+  #     interval: 1m30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 100s
+  #   volumes:
+  #     - ./georoma-dev-geoserver_data:/opt/geoserver/data_dir_shared
+  #     - ./data-geoserver-7:/dati-geoserver
+  #     - ./cache-geoserver-4:/cache-geoserver
+  #   deploy:
+  #     mode: replicated
+  #     replicas: 1
+  #     labels:
+  #       - "traefik.port=8080"
+  #       - "traefik.docker.network=lan-cdr-coll"
+  #       # - "traefik.backend.loadbalancer.stickyness=true"
+  #       # - "traefik.backend.loadbalancer.stickiness.cookieName=JSESSIONID"
+  #       - "traefik.node.frontend.entryPoints=http"
+  #       - "traefik.node.frontend.rule=Host:georoma-geoserver-node3.ecaas.datacenter.comune.roma"
+  #       - "com.dxc.ecaas.friendlyname=Georoma Geoserver 3"        
+  #       - "com.docker.ucp.access.label=/Shared/georoma"
+  #     placement: 
+  #       constraints: [node.labels.ambiente==collaudo] 
+  #     restart_policy:
+  #       condition: on-failure
+  #     resources:
+  #       limits:
+  #         cpus: '3'
+  #         memory: 2g
+
+  # node4-geo:
+  #   image: dtr.datacenter.comune.roma/formaromae/georoma-geoserver-cluster-node4:0.0.6
+  #   build:
+  #     context: ./geoserver
+  #     dockerfile: Dockerfile
+  #   stdin_open: true  
+  #   tty: true
+  #   networks:
+  #     - lan-cdr-coll
+  #   environment:
+  #     - "JAVA_OPTS=-Xms8192m -Xmx8192m -Dlog4j2.formatMsgNoLookups=True -Dhttps.protocols=TLSv1.2 -Dgeofence-ovr=file:/opt/geoserver/data_dir_shared/geofence/geofence-default-override.properties -Dhazelcast.config.dir=/opt/geoserver/data_dir_shared/gwc-distributed -Dhttp.proxyHost=10.173.21.20 -Dhttp.proxyPort=3128 -Dhttps.proxyHost=10.173.21.20 -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=\"localhost|127.0.0.1|ssopre.comune.roma.it\" -Dhttps.nonProxyHosts=\"localhost|127.0.0.1|ssopre.comune.roma.it\""
+  #     - GEOWEBCACHE_CACHE_DIR=/cache-geoserver/gwc
+  #     - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir_shared      
+  #     - STABLE_EXTENSIONS=oracle-plugin,importer-plugin,geofence-server-plugin
+  #     - COMMUNITY_EXTENSIONS=importer-jdbc-plugin,jms-cluster-plugin,sec-oauth2-openid-connect-plugin,gwc-distributed-plugin
+  #     - EXISTING_DATA_DIR=true
+  #     - GEOSERVER_ADMIN_PASSWORD=Geo$$erver1!
+  #     - RESET_ADMIN_CREDENTIALS=TRUE
+  #     - EXTRA_CONFIG_DIR=/settings
+  #     - RANDOMSTRING=23bd87cfa32node4
+  #     - INSTANCE_STRING=ac3bcba2fa7d989678a01ef4facc4173010cd8b40d2e5f5a8d18d5f863cnode4
+  #     - BROKER_URL=tcp://br-geo-coll:61616
+  #     - READONLY=disabled
+  #     - CLUSTER_DURABILITY=false
+  #     - CLUSTERING=True
+  #     - TOGGLE_MASTER=true
+  #     - TOGGLE_SLAVE=true
+  #     - EMBEDDED_BROKER=disabled
+  #     - GEOSERVER_CSRF_DISABLED=true
+  #   depends_on:
+  #     - br-geo-coll
+  #     - gfencedb
+  #   healthcheck:
+  #     test: curl --noproxy "*" --fail -s http://127.0.0.1:8080/geoserver/web || exit 1
+  #     interval: 1m30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 100s
+  #   volumes:
+  #     - ./georoma-dev-geoserver_data:/opt/geoserver/data_dir_shared
+  #     - ./data-geoserver-7:/dati-geoserver
+  #     - ./cache-geoserver-4:/cache-geoserver
+  #   deploy:
+  #     mode: replicated
+  #     replicas: 1
+  #     labels:
+  #       - "traefik.port=8080"
+  #       - "traefik.docker.network=lan-cdr-coll"
+  #       # - "traefik.backend.loadbalancer.stickyness=true"
+  #       # - "traefik.backend.loadbalancer.stickiness.cookieName=JSESSIONID"
+  #       - "traefik.node.frontend.entryPoints=http"
+  #       - "traefik.node.frontend.rule=Host:georoma-geoserver-node4.ecaas.datacenter.comune.roma"
+  #       - "com.dxc.ecaas.friendlyname=Georoma Geoserver 4"        
+  #       - "com.docker.ucp.access.label=/Shared/georoma"
+  #     placement: 
+  #       constraints: [node.labels.ambiente==collaudo] 
+  #     restart_policy:
+  #       condition: on-failure
+  #     resources:
+  #       limits:
+  #         cpus: '3'
+  #         memory: 2g
+
+  lb-geo:
+    image: dtr.datacenter.comune.roma/formaromae/georoma-geoserver-nginx:0.0.5
+    build:
+      context: ./georoma-geoserver-loadbalancer
+      dockerfile: Dockerfile.caddy
+    stdin_open: true  
+    tty: true
+    depends_on:
+      node1-geo:
+        condition: service_healthy
+      node2-geo:
+        condition: service_healthy
+      gfencedb:
+        condition: service_healthy
+    ports:
+      - 9005:9005
+      - 80:80
+      - 443:443
+    networks:
+      - lan-cdr-coll
+    # healthcheck:
+    #   test: service nginx status || exit 1
+    #   interval: 1m30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 100s       
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.port=80"
+        - "traefik.docker.network=lan-cdr-coll"
+        # - "traefik.backend.loadbalancer.stickyness=true"
+        # - "traefik.backend.loadbalancer.stickiness.cookieName=JSESSIONID"
+        - "traefik.frontend.entryPoints=http,https"
+        - "traefik.frontend.rule=Host:geoportale-preprod.comune.roma.it,georoma-geoserver.ecaas.datacenter.comune.roma;PathPrefix:/geoserver"
+        - "com.dxc.ecaas.friendlyname=Georoma Geoserver Load Balancer"        
+        - "com.docker.ucp.access.label=/Shared/georoma"
+
+      placement: 
+        constraints: [node.labels.ambiente==collaudo] 
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '3'
+          memory: 2g
+
+
+  gfencedb:
+    image: dtr.datacenter.comune.roma/formaromae/georoma-geofence-postgis:0.0.1
+    container_name: gfencedb
+    build:
+      context: ./georoma-geofence-postgis
+      dockerfile: Dockerfile
+    stdin_open: true
+    tty: true
+    networks:
+      - lan-cdr-coll
+    environment:
+      POSTGRES_DB: thedb
+      POSTGRES_USER: theuser
+      POSTGRES_PASS: thepassword
+    volumes:
+      - gfencedb-data:/var/lib/postgresql
+    healthcheck:
+      test: "PGPASSWORD=thepassword pg_isready -h 127.0.0.1 -U theuser -d thedb"
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.docker.network=lan-cdr-coll"
+        # - "traefik.backend.loadbalancer.stickyness=true"
+        - "traefik.frontend.entryPoints=http,https"
+        - "com.dxc.ecaas.friendlyname=Georoma geofence Postgis"        
+        - "com.docker.ucp.access.label=/Shared/georoma"
+      placement: 
+        constraints: [node.labels.ambiente==collaudo] 
+      restart_policy:
+        condition: on-failure
+        delay: 0s
+        max_attempts: 3
+        window: 10s

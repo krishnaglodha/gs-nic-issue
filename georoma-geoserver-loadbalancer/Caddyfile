@@ -1,0 +1,21 @@
+{
+	# Turn on all debug log
+	debug
+	log {
+		output stdout
+		level DEBUG
+	}
+}
+:9005
+reverse_proxy node1-geo:8080 node2-geo:8080 {
+	# header_up Host                {host}
+	# header_up Origin              {host}
+	# header_up X-Real-IP           {remote}
+	# header_up X-Forwarded-Host    {host}
+	# header_up X-Forwarded-Server  {host}
+	# header_up X-Forwarded-Port    {port}
+	# header_up X-Forwarded-For     {remote}
+	# header_up X-Forwarded-Proto   {scheme}
+
+	lb_policy cookie
+}
